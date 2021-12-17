@@ -1,0 +1,252 @@
+---
+title: "Single cell analysis of blastocyst model"
+output:
+  pdf_document:
+    toc: yes
+  html_notebook:
+    toc: yes
+    toc_float: yes
+    code_folding: hide
+  html_document:
+    df_print: paged
+    toc: yes
+editor_options:
+  chunk_output_type: inline
+---
+
+# Summary
+
+Single cell analysis using Human naive pluripotent cells confirms seggregation of trophectoderm, hypoblast and epiblast with exactness to human embryo. 
+
+1. For the analysis to perform raw count data was obtained from GSE171820 and processed in Seurat R Package. \n
+2. As a part of quality control genes with zero count across all the samples were removed. \n
+3. Initially cells were first clustered based on their classification stages. \n
+4. As suggested in research article, Blastoid cells from day 3 and day 4 behaves more similar to human Blastocysts cells of day 6 and 7. Therefore, the analysis was first restricted to day 3 and day 4.
+5. The analysis suggests that cells were classified into three subclasses i.e., Epiblast, Hypoblast, Trophectodem.
+6. Similar analysis was performed on day 6,7 and 8. The analysis suggested that marker genes of Epiblast and Trophectoderm are expressed in two clusters, hence, they are not well seperated as day 3 and 4. \n
+7. Moving forward Blastocysts and  Blastoid analyzed together, to see the overlap. The tSNE suggest that the cells are clustered. However, there were few cells from either of the condition were clustering independently. \n
+8. Overall, the finding suggests a clear seggregation of epiblast, hypoblast and trophectoderm for day3 and day4 cells. \n
+9. The merit of this analysis is the sequencing performed with smart-seq2, which allows greater read depth and identifies large protein coding genes. \n
+10. The analysis will benefit with more cells for better confidence.
+11. Future work ->  Trajectory analysis will analysis will help to understand the time-frame on sub-cell clustering. 
+
+
+# Dataset
+
+The raw count data was downloaded from GEO with an accession number of GSE171820. \n
+
+The reference paper used for analysis: \n
+__Naive stem cell blastocysts model captures human embryo lineage segregation.__
+
+The required package are:
+
+1. Seurat. \n
+2. Tidyverse.\n
+3. data.table. \n
+
+Seurat package is used to analyze data.
+
+# Import dataset
+```{r,echo=FALSE, message=FALSE,warning=FALSE}
+library(data.table)
+GSE171820 = fread ("GSE171820_Counts_raw.txt")
+GSE171820 = as.data.frame(GSE171820)
+rownames(GSE171820) = GSE171820$gene_name
+GSE171820$V1 = NULL
+GSE171820$Length =NULL
+colnames(GSE171820) = gsub("\\.","-",colnames(GSE171820))
+
+sample_info = read.csv("GSE171820_Sample_Assignments.csv")
+sample_info$Name = gsub("\\.","-",sample_info$Name)
+sample_info$condition = paste0(sample_info$Time,"_",sample_info$Lineage,"_",sample_info$Origin)
+
+seeker=function(x)
+{
+ return(as.character(sample_info[sample_info[,"Name"]==x,"condition"]))
+}
+col_name = sapply (colnames(GSE171820), seeker)
+col_name[1] = "gene_name"
+colnames(GSE171820) = col_name
+```
+
+Total number of cells are 495 and 19962 protein coding genes.
+
+# Histogram
+  To check the number of genes with zero counts across the datasets.
+  
+```{r}
+tmp_df = as.data.frame(GSE171820$gene_name)
+rownames(tmp_df) = tmp_df$`GSE171820$gene_name`
+GSE171820$gene_name = NULL
+tmp = log2(GSE171820+1)
+tmp_df$averge_genecounts = rowMeans(tmp)
+hist(tmp_df$averge_genecounts)
+tmps = tmp_df[tmp_df$averge_genecounts>0,]
+GSE171820_df = GSE171820[rownames(GSE171820)%in%tmps$`GSE171820$gene_name`,]
+```
+
+Total number of genes with zero counts are 988, hence, I removed them from further analysis. Total number of genes remaining were 18974 across 495 cells
+
+# Loading data to seurat package
+
+```{r,warning=FALSE,message=FALSE,echo=FALSE}
+library(Seurat)
+data <- CreateSeuratObject(counts = GSE171820_df, project = "Blastocyst", min.cells = 2, min.features = 200)
+```
+# Quality check of the data
+
+## Mitochondrial contamination
+
+```{r,warning=FALSE,message=FALSE,fig.width=15, fig.height=8}
+data[["percent.mt"]] <- PercentageFeatureSet(data, pattern = "^MT-")
+VlnPlot(data, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+```
+
+From above plot, we see see that, we have good quality of the dataset. Low mitochondrial contamination is observed. Hence, removing the cells with mitochondrial marker gene expression, will reduce the total number of cells. 
+# Normalization
+
+Normalization is performed using default parameters.
+
+```{r,message=FALSE, warning=FALSE, echo=FALSE}
+data <- NormalizeData(data, normalization.method = "LogNormalize", scale.factor = 1000)
+```
+# PCA analysis
+
+PCA is performed to observe overall seggregation of cells.
+```{r,warning=FALSE, message=FALSE,echo=FALSE,results='hide'}
+data <- FindVariableFeatures(data, selection.method = "vst", nfeatures = 2000)
+
+all.genes<- rownames(data)
+data <- ScaleData(data, features = all.genes)
+data <- RunPCA(data, features = VariableFeatures(object = data))
+a <- Idents(data)
+a1 = gsub("\\..*","",names(a))
+Idents(data) <- paste0(a1)
+```
+```{r,fig.width=8, fig.height=8}
+DimPlot(data)
+
+```
+
+From above PCA plot, we can not see a differentiation between day 3 and day 4. 
+
+# Day 3 and Day 4 analysis
+```{r,echo=F,message=FALSE,warning=F,results='hide'}
+a <- Idents(data)
+a1 = gsub("\\_.*","",names(a))
+Idents(data) <- paste0(a1)
+
+A = subset(data, idents = c("Day3","Day4"))
+
+A <- ScaleData(A, features = all.genes)
+A <- RunTSNE(A, features = VariableFeatures(object = A))
+
+```
+
+```{r}
+DimPlot(A, reduction = "tsne")
+
+```
+
+## Cell cluster identification 
+### Epiblast
+```{r,fig.width=8, fig.height=8}
+
+FeaturePlot(A,features = c("POU5F1","NANOG","KLF17","ARGFX"))
+
+```
+From abobe plots, I see that the bottom cluster cells belongs to Epiblast.
+
+### Hypoblast 
+
+
+```{r,fig.width=8, fig.height=8}
+FeaturePlot(A,features = c("SOX17","FOXA2","GATA4","PDGFRA"))
+```
+### Trophectoderm
+
+```{r,fig.width=8, fig.height=8}
+FeaturePlot(A,features = c("GATA2","SLC12A3","CDX2","TEAD3"))
+```
+From above plot, we see that above cell cluster is  Trophectoderm. 
+
+# Day 6,7,8 analysis
+```{r,message=FALSE, warning=FALSE,echo=FALSE,results='hide'}
+a <- Idents(data)
+a1 = gsub("\\_.*","",names(a))
+Idents(data) <- paste0(a1)
+
+A = subset(data, idents = c("Day5","Day6","Day7"))
+a <- Idents(data)
+a1 = gsub("\\..*","",names(a))
+a2 = gsub ("Day5_|Day6_|Day7_","",a1)
+Idents(A) <- paste0(a2)
+A <- ScaleData(A, features = all.genes)
+A <- RunTSNE(A, features = VariableFeatures(object = A))
+
+```
+```{r,fig.width=8, fig.height=8}
+DimPlot(A, reduction = "tsne")
+```
+## Cell cluster identification 
+### Epiblast
+
+```{r,fig.width=8, fig.height=8}
+
+FeaturePlot(A,features = c("POU5F1","NANOG","KLF17","ARGFX"))
+
+```
+
+### Hypoblast 
+
+```{r,fig.width=8, fig.height=8}
+FeaturePlot(A,features = c("SOX17","FOXA2","GATA4","PDGFRA"))
+```
+### Trophectoderm
+
+```{r,fig.width=8, fig.height=8}
+FeaturePlot(A,features = c("GATA2","SLC12A3","CDX2","TEAD3"))
+```
+
+The above tSNE analysis suggests that human embryos at day 5,6,7 Epliblast and Trophectoderm are more segregated and markers are expressed in two different clusters.
+
+
+# Blastoid and Blastocyst
+
+```{r,echo=FALSE, message =FALSE,results='hide',warning=FALSE}
+a <- Idents(data)
+a1 = gsub("\\..*","",names(a))
+a2 = gsub("^.*\\_","",a1)
+Idents(data) <- paste0(a2)
+data <- ScaleData(data, features = all.genes)
+data <- RunTSNE(data, features = VariableFeatures(object = data))
+```
+
+```{r,fig.width=8, fig.height=8,echo=TRUE}
+DimPlot(data, reduction = "tsne")
+```
+## Cell cluster identification 
+### Epiblast
+```{r,fig.width=8, fig.height=12}
+FeaturePlot(data,features = c("SOX17","FOXA2","GATA4","PDGFRA"))
+```
+### Hypoblast
+```{r,fig.width=8, fig.height=12}
+FeaturePlot(data,features = c("POU5F1","NANOG","KLF17","ARGFX"))
+```
+### Trophectoderm
+
+```{r,fig.width=8, fig.height=12}
+FeaturePlot(data,features = c("GATA2","SLC12A3","CDX2","TEAD3"))
+```
+# Conclusion
+
+Analysis suggests a clear seggregation of epiblast, 
+hypoblast and trophectoderm for day3 and day4 cells.
+
+```{r}
+
+```
+
+
